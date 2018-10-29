@@ -29,6 +29,8 @@
 #include <io.h>
 #endif
 
+#include <time.h> //snleo - to provide nanosleep() function
+
 #if defined(_WIN32) && !defined(__MINGW32CE__)
 #undef open
 #undef lseek
@@ -68,7 +70,9 @@ int avpriv_open(const char *filename, int flags, ...)
     int fd;
     unsigned int mode = 0;
     va_list ap;
-
+    int int_tried; //snleo
+    struct timespec ts; //snleo
+    
     va_start(ap, flags);
     if (flags & O_CREAT)
         mode = va_arg(ap, unsigned int);
@@ -80,8 +84,19 @@ int avpriv_open(const char *filename, int flags, ...)
 #ifdef O_NOINHERIT
     flags |= O_NOINHERIT;
 #endif
+    //snleo - try to open up to 1s if not successful [original: open(filename, flags, mode)]
 
-    fd = open(filename, flags, mode);
+    int_tried = 0;
+    ts.tv_sec = 10/1000;
+    ts.tv_nsec = 0;
+    while((fd = open(filename, flags, mode)) < 0 && (int_tried < 10000))
+    {
+      nanosleep(&ts, NULL);
+      int_tried++;
+    }
+    if(int_tried >= 10000)
+      av_log(NULL, AV_LOG_DEBUG, "snleo - tried max reload\n");
+    
 #if HAVE_FCNTL
     if (fd != -1) {
         if (fcntl(fd, F_SETFD, FD_CLOEXEC) == -1)
