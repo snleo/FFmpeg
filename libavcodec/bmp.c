@@ -133,8 +133,11 @@ static int bmp_decode_frame(AVCodecContext *avctx,
         alpha = bytestream_get_le32(&buf);
     }
 
-    avctx->width  = width;
-    avctx->height = height > 0 ? height : -(unsigned)height;
+    ret = ff_set_dimensions(avctx, width, height > 0 ? height : -(unsigned)height);
+    if (ret < 0) {
+        av_log(avctx, AV_LOG_ERROR, "Failed to set dimensions %d %d\n", width, height);
+        return AVERROR_INVALIDDATA;
+    }
 
     avctx->pix_fmt = AV_PIX_FMT_NONE;
 
@@ -288,7 +291,7 @@ static int bmp_decode_frame(AVCodecContext *avctx,
         case 1:
             for (i = 0; i < avctx->height; i++) {
                 int j;
-                for (j = 0; j < n; j++) {
+                for (j = 0; j < avctx->width >> 3; j++) {
                     ptr[j*8+0] =  buf[j] >> 7;
                     ptr[j*8+1] = (buf[j] >> 6) & 1;
                     ptr[j*8+2] = (buf[j] >> 5) & 1;
@@ -297,6 +300,9 @@ static int bmp_decode_frame(AVCodecContext *avctx,
                     ptr[j*8+5] = (buf[j] >> 2) & 1;
                     ptr[j*8+6] = (buf[j] >> 1) & 1;
                     ptr[j*8+7] =  buf[j]       & 1;
+                }
+                for (j = 0; j < (avctx->width & 7); j++) {
+                    ptr[avctx->width - (avctx->width & 7) + j] = buf[avctx->width >> 3] >> (7 - j) & 1;
                 }
                 buf += n;
                 ptr += linesize;

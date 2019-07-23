@@ -50,11 +50,11 @@
 #include "aac.h"
 #include "aactab.h"
 #include "aacdectab.h"
+#include "adts_header.h"
 #include "cbrt_data.h"
 #include "sbr.h"
 #include "aacsbr.h"
 #include "mpeg4audio.h"
-#include "aacadtsdec.h"
 #include "profiles.h"
 #include "libavutil/intfloat.h"
 
@@ -247,14 +247,12 @@ static void apply_independent_coupling(AACContext *ac,
                                        SingleChannelElement *target,
                                        ChannelElement *cce, int index)
 {
-    int i;
     const float gain = cce->coup.gain[index][0];
     const float *src = cce->ch[0].ret;
     float *dest = target->ret;
     const int len = 1024 << (ac->oc[1].m4ac.sbr == 1);
 
-    for (i = 0; i < len; i++)
-        dest[i] += gain * src[i];
+    ac->fdsp->vector_fmac_scalar(dest, src, gain, len);
 }
 
 #include "aacdec_template.c"
@@ -318,8 +316,8 @@ static int latm_decode_audio_specific_config(struct LATMContext *latmctx,
         ac->oc[1].m4ac.sample_rate != m4ac.sample_rate ||
         ac->oc[1].m4ac.chan_config != m4ac.chan_config) {
 
-        if(latmctx->initialized) {
-            av_log(avctx, AV_LOG_INFO, "audio config changed\n");
+        if (latmctx->initialized) {
+            av_log(avctx, AV_LOG_INFO, "audio config changed (sample_rate=%d, chan_config=%d)\n", m4ac.sample_rate, m4ac.chan_config);
         } else {
             av_log(avctx, AV_LOG_DEBUG, "initializing latmctx\n");
         }
@@ -431,6 +429,8 @@ static int read_payload_length_info(struct LATMContext *ctx, GetBitContext *gb)
     if (ctx->frame_length_type == 0) {
         int mux_slot_length = 0;
         do {
+            if (get_bits_left(gb) < 8)
+                return AVERROR_INVALIDDATA;
             tmp = get_bits(gb, 8);
             mux_slot_length += tmp;
         } while (tmp == 255);
@@ -456,11 +456,11 @@ static int read_audio_mux_element(struct LATMContext *latmctx,
     } else if (!latmctx->aac_ctx.avctx->extradata) {
         av_log(latmctx->aac_ctx.avctx, AV_LOG_DEBUG,
                "no decoder config found\n");
-        return AVERROR(EAGAIN);
+        return 1;
     }
     if (latmctx->audio_mux_version_A == 0) {
         int mux_slot_length_bytes = read_payload_length_info(latmctx, gb);
-        if (mux_slot_length_bytes * 8 > get_bits_left(gb)) {
+        if (mux_slot_length_bytes < 0 || mux_slot_length_bytes * 8LL > get_bits_left(gb)) {
             av_log(latmctx->aac_ctx.avctx, AV_LOG_ERROR, "incomplete frame\n");
             return AVERROR_INVALIDDATA;
         } else if (mux_slot_length_bytes * 8 + 256 < get_bits_left(gb)) {
@@ -493,8 +493,8 @@ static int latm_decode_frame(AVCodecContext *avctx, void *out,
     if (muxlength > avpkt->size)
         return AVERROR_INVALIDDATA;
 
-    if ((err = read_audio_mux_element(latmctx, &gb)) < 0)
-        return err;
+    if ((err = read_audio_mux_element(latmctx, &gb)))
+        return (err < 0) ? err : avpkt->size;
 
     if (!latmctx->initialized) {
         if (!avctx->extradata) {

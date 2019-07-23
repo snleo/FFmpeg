@@ -140,7 +140,7 @@ static int msmpeg4v12_decode_mb(MpegEncContext *s, int16_t block[6][64])
         if(s->msmpeg4_version==2)
             cbp= get_vlc2(&s->gb, v2_intra_cbpc_vlc.table, V2_INTRA_CBPC_VLC_BITS, 1);
         else
-            cbp= get_vlc2(&s->gb, ff_h263_intra_MCBPC_vlc.table, INTRA_MCBPC_VLC_BITS, 1);
+            cbp= get_vlc2(&s->gb, ff_h263_intra_MCBPC_vlc.table, INTRA_MCBPC_VLC_BITS, 2);
         if(cbp<0 || cbp>3){
             av_log(s->avctx, AV_LOG_ERROR, "cbpc %d invalid at %d %d\n", cbp, s->mb_x, s->mb_y);
             return -1;
@@ -169,12 +169,23 @@ static int msmpeg4v12_decode_mb(MpegEncContext *s, int16_t block[6][64])
         s->mv[0][0][1] = my;
         *mb_type_ptr = MB_TYPE_L0 | MB_TYPE_16x16;
     } else {
+        int v;
         if(s->msmpeg4_version==2){
             s->ac_pred = get_bits1(&s->gb);
-            cbp|= get_vlc2(&s->gb, ff_h263_cbpy_vlc.table, CBPY_VLC_BITS, 1)<<2; //FIXME check errors
+            v = get_vlc2(&s->gb, ff_h263_cbpy_vlc.table, CBPY_VLC_BITS, 1);
+            if (v < 0) {
+                av_log(s->avctx, AV_LOG_ERROR, "cbpy vlc invalid\n");
+                return -1;
+            }
+            cbp|= v<<2;
         } else{
             s->ac_pred = 0;
-            cbp|= get_vlc2(&s->gb, ff_h263_cbpy_vlc.table, CBPY_VLC_BITS, 1)<<2; //FIXME check errors
+            v = get_vlc2(&s->gb, ff_h263_cbpy_vlc.table, CBPY_VLC_BITS, 1);
+            if (v < 0) {
+                av_log(s->avctx, AV_LOG_ERROR, "cbpy vlc invalid\n");
+                return -1;
+            }
+            cbp|= v<<2;
             if(s->pict_type==AV_PICTURE_TYPE_P) cbp^=0x3C;
         }
         *mb_type_ptr = MB_TYPE_INTRA;
@@ -196,6 +207,9 @@ static int msmpeg4v34_decode_mb(MpegEncContext *s, int16_t block[6][64])
     int cbp, code, i;
     uint8_t *coded_val;
     uint32_t * const mb_type_ptr = &s->current_picture.mb_type[s->mb_x + s->mb_y*s->mb_stride];
+
+    if (get_bits_left(&s->gb) <= 0)
+        return AVERROR_INVALIDDATA;
 
     if (s->pict_type == AV_PICTURE_TYPE_P) {
         if (s->use_skip_mb_code) {
@@ -397,6 +411,14 @@ av_cold int ff_msmpeg4_decode_init(AVCodecContext *avctx)
 int ff_msmpeg4_decode_picture_header(MpegEncContext * s)
 {
     int code;
+
+    // at minimum one bit per macroblock is required at least in a valid frame,
+    // we discard frames much smaller than this. Frames smaller than 1/8 of the
+    // smallest "black/skip" frame generally contain not much recoverable content
+    // while at the same time they have the highest computational requirements
+    // per byte
+    if (get_bits_left(&s->gb) * 8LL < (s->width+15)/16 * ((s->height+15)/16))
+        return AVERROR_INVALIDDATA;
 
     if(s->msmpeg4_version==1){
         int start_code = get_bits_long(&s->gb, 32);

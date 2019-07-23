@@ -731,7 +731,7 @@ static int vorbis_parse_setup_hdr_residues(vorbis_context *vc)
         if (!res_setup->classifs)
             return AVERROR(ENOMEM);
 
-        ff_dlog(NULL, "    begin %"PRIu32" end %"PRIu32" part.size %d classif.s %d classbook %d \n",
+        ff_dlog(NULL, "    begin %"PRIu32" end %"PRIu32" part.size %u classif.s %"PRIu8" classbook %"PRIu8"\n",
                 res_setup->begin, res_setup->end, res_setup->partition_size,
                 res_setup->classifications, res_setup->classbook);
 
@@ -1097,13 +1097,14 @@ static int vorbis_floor0_decode(vorbis_context *vc,
 {
     vorbis_floor0 *vf = &vfu->t0;
     float *lsp = vf->lsp;
-    unsigned amplitude, book_idx;
+    unsigned book_idx;
+    uint64_t amplitude;
     unsigned blockflag = vc->modes[vc->mode_number].blockflag;
 
     if (!vf->amplitude_bits)
         return 1;
 
-    amplitude = get_bits(&vc->gb, vf->amplitude_bits);
+    amplitude = get_bits64(&vc->gb, vf->amplitude_bits);
     if (amplitude > 0) {
         float last = 0;
         unsigned idx, lsp_len = 0;
@@ -1127,8 +1128,10 @@ static int vorbis_floor0_decode(vorbis_context *vc,
             ff_dlog(NULL, "floor0 dec: maximum depth: %d\n", codebook.maxdepth);
             /* read temp vector */
             vec_off = get_vlc2(&vc->gb, codebook.vlc.table,
-                               codebook.nb_bits, codebook.maxdepth)
-                      * codebook.dimensions;
+                               codebook.nb_bits, codebook.maxdepth);
+            if (vec_off < 0)
+                return AVERROR_INVALIDDATA;
+            vec_off *= codebook.dimensions;
             ff_dlog(NULL, "floor0 dec: vector offset: %d\n", vec_off);
             /* copy each vector component and add last to it */
             for (idx = 0; idx < codebook.dimensions; ++idx)
@@ -1181,7 +1184,7 @@ static int vorbis_floor0_decode(vorbis_context *vc,
 
                 /* calculate linear floor value */
                 q = exp((((amplitude*vf->amplitude_offset) /
-                          (((1 << vf->amplitude_bits) - 1) * sqrt(p + q)))
+                          (((1ULL << vf->amplitude_bits) - 1) * sqrt(p + q)))
                          - vf->amplitude_offset) * .11512925f);
 
                 /* fill vector */
@@ -1862,6 +1865,7 @@ AVCodec ff_vorbis_decoder = {
     .decode          = vorbis_decode_frame,
     .flush           = vorbis_decode_flush,
     .capabilities    = AV_CODEC_CAP_DR1,
+    .caps_internal   = FF_CODEC_CAP_INIT_CLEANUP,
     .channel_layouts = ff_vorbis_channel_layouts,
     .sample_fmts     = (const enum AVSampleFormat[]) { AV_SAMPLE_FMT_FLTP,
                                                        AV_SAMPLE_FMT_NONE },

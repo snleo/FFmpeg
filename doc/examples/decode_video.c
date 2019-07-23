@@ -74,7 +74,7 @@ static void decode(AVCodecContext *dec_ctx, AVFrame *frame, AVPacket *pkt,
 
         /* the picture is allocated by the decoder. no need to
            free it */
-        snprintf(buf, sizeof(buf), filename, dec_ctx->frame_number);
+        snprintf(buf, sizeof(buf), "%s-%d", filename, dec_ctx->frame_number);
         pgm_save(frame->data[0], frame->linesize[0],
                  frame->width, frame->height, buf);
     }
@@ -100,8 +100,6 @@ int main(int argc, char **argv)
     }
     filename    = argv[1];
     outfilename = argv[2];
-
-    avcodec_register_all();
 
     pkt = av_packet_alloc();
     if (!pkt)

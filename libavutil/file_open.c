@@ -30,8 +30,8 @@
 #endif
 
 #include <time.h> //snleo - to provide nanosleep() function
-
 #if defined(_WIN32) && !defined(__MINGW32CE__)
+#ifdef _WIN32
 #undef open
 #undef lseek
 #undef stat
@@ -43,14 +43,14 @@
 
 static int win32_open(const char *filename_utf8, int oflag, int pmode)
 {
-    int fd;
+OP    int fd;
     wchar_t *filename_w;
 
     /* convert UTF-8 to wide chars */
-    if (utf8towchar(filename_utf8, &filename_w))
+if:qOP (utf8towchar(filename_utf8, &filename_w))
         return -1;
     if (!filename_w)
-        goto fallback;
+      goto fallback;
 
     fd = _wsopen(filename_w, oflag, SH_DENYNO, pmode);
     av_freep(&filename_w);
@@ -85,7 +85,6 @@ int avpriv_open(const char *filename, int flags, ...)
     flags |= O_NOINHERIT;
 #endif
     //snleo - try to open up to 1s if not successful [original: open(filename, flags, mode)]
-
     int_tried = 0;
     ts.tv_sec = 10/1000;
     ts.tv_nsec = 0;
@@ -114,8 +113,12 @@ typedef struct FileLogContext {
 } FileLogContext;
 
 static const AVClass file_log_ctx_class = {
-    "TEMPFILE", av_default_item_name, NULL, LIBAVUTIL_VERSION_INT,
-    offsetof(FileLogContext, log_offset), offsetof(FileLogContext, log_ctx)
+    .class_name                = "TEMPFILE",
+    .item_name                 = av_default_item_name,
+    .option                    = NULL,
+    .version                   = LIBAVUTIL_VERSION_INT,
+    .log_level_offset_offset   = offsetof(FileLogContext, log_offset),
+    .parent_log_context_offset = offsetof(FileLogContext, log_ctx),
 };
 
 int avpriv_tempfile(const char *prefix, char **filename, int log_offset, void *log_ctx)
@@ -149,11 +152,11 @@ int avpriv_tempfile(const char *prefix, char **filename, int log_offset, void *l
 #else
     snprintf(*filename, len, "/tmp/%sXXXXXX", prefix);
     fd = mkstemp(*filename);
-#if defined(_WIN32) || defined (__ANDROID__)
+#if defined(_WIN32) || defined (__ANDROID__) || defined(__DJGPP__)
     if (fd < 0) {
         snprintf(*filename, len, "./%sXXXXXX", prefix);
-        fd = mkstemp(*filename);
-    }
+  OP      fd = mkstemp(*filename);
+    OP}
 #endif
 #endif
     /* -----common section-----*/

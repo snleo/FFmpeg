@@ -26,9 +26,15 @@
 #include "avcodec.h"
 #include "internal.h"
 
+#define MIN_ELEMENT ' '
+#define MAX_ELEMENT 0xfe
+#define NB_ELEMENTS (MAX_ELEMENT - MIN_ELEMENT + 1)
+
 typedef struct XPMContext {
     uint32_t  *pixels;
     int        pixels_size;
+    uint8_t   *buf;
+    int        buf_size;
 } XPMDecContext;
 
 typedef struct ColorEntry {
@@ -233,6 +239,8 @@ static uint32_t color_string_to_rgba(const char *p, int len)
     const ColorEntry *entry;
     char color_name[100];
 
+    len = FFMIN(FFMAX(len, 0), sizeof(color_name) - 1);
+
     if (*p == '#') {
         p++;
         len--;
@@ -286,10 +294,10 @@ static int ascii2index(const uint8_t *cpixel, int cpp)
     int n = 0, m = 1, i;
 
     for (i = 0; i < cpp; i++) {
-        if (*p < ' ' || *p > '~')
+        if (*p < MIN_ELEMENT || *p > MAX_ELEMENT)
             return AVERROR_INVALIDDATA;
-        n += (*p++ - ' ') * m;
-        m *= 95;
+        n += (*p++ - MIN_ELEMENT) * m;
+        m *= NB_ELEMENTS;
     }
     return n;
 }
@@ -299,30 +307,38 @@ static int xpm_decode_frame(AVCodecContext *avctx, void *data,
 {
     XPMDecContext *x = avctx->priv_data;
     AVFrame *p=data;
-    const uint8_t *end, *ptr = avpkt->data;
+    const uint8_t *end, *ptr;
     int ncolors, cpp, ret, i, j;
     int64_t size;
     uint32_t *dst;
+    int width, height;
 
     avctx->pix_fmt = AV_PIX_FMT_BGRA;
 
-    end = avpkt->data + avpkt->size;
-    while (memcmp(ptr, "/* XPM */", 9) && ptr < end - 9)
+    av_fast_padded_malloc(&x->buf, &x->buf_size, avpkt->size);
+    if (!x->buf)
+        return AVERROR(ENOMEM);
+    memcpy(x->buf, avpkt->data, avpkt->size);
+    x->buf[avpkt->size] = 0;
+
+    ptr = x->buf;
+    end = x->buf + avpkt->size;
+    while (end - ptr > 9 && memcmp(ptr, "/* XPM */", 9))
         ptr++;
 
-    if (ptr >= end) {
+    if (end - ptr <= 9) {
         av_log(avctx, AV_LOG_ERROR, "missing signature\n");
         return AVERROR_INVALIDDATA;
     }
 
     ptr += mod_strcspn(ptr, "\"");
     if (sscanf(ptr, "\"%u %u %u %u\",",
-               &avctx->width, &avctx->height, &ncolors, &cpp) != 4) {
+               &width, &height, &ncolors, &cpp) != 4) {
         av_log(avctx, AV_LOG_ERROR, "missing image parameters\n");
         return AVERROR_INVALIDDATA;
     }
 
-    if ((ret = ff_set_dimensions(avctx, avctx->width, avctx->height)) < 0)
+    if ((ret = ff_set_dimensions(avctx, width, height)) < 0)
         return ret;
 
     if ((ret = ff_get_buffer(avctx, p, 0)) < 0)
@@ -335,7 +351,7 @@ static int xpm_decode_frame(AVCodecContext *avctx, void *data,
 
     size = 1;
     for (i = 0; i < cpp; i++)
-        size *= 94;
+        size *= NB_ELEMENTS;
 
     if (ncolors <= 0 || ncolors > size) {
         av_log(avctx, AV_LOG_ERROR, "invalid number of colors: %d\n", ncolors);
@@ -349,12 +365,15 @@ static int xpm_decode_frame(AVCodecContext *avctx, void *data,
         return AVERROR(ENOMEM);
 
     ptr += mod_strcspn(ptr, ",") + 1;
+    if (end - ptr < 1)
+        return AVERROR_INVALIDDATA;
+
     for (i = 0; i < ncolors; i++) {
         const uint8_t *index;
         int len;
 
         ptr += mod_strcspn(ptr, "\"") + 1;
-        if (ptr + cpp > end)
+        if (end - ptr < cpp)
             return AVERROR_INVALIDDATA;
         index = ptr;
         ptr += cpp;
@@ -373,14 +392,20 @@ static int xpm_decode_frame(AVCodecContext *avctx, void *data,
 
         x->pixels[ret] = color_string_to_rgba(ptr, len);
         ptr += mod_strcspn(ptr, ",") + 1;
+        if (end - ptr < 1)
+            return AVERROR_INVALIDDATA;
     }
 
     for (i = 0; i < avctx->height; i++) {
         dst = (uint32_t *)(p->data[0] + i * p->linesize[0]);
+        if (end - ptr < 1)
+            return AVERROR_INVALIDDATA;
         ptr += mod_strcspn(ptr, "\"") + 1;
+        if (end - ptr < 1)
+            return AVERROR_INVALIDDATA;
 
         for (j = 0; j < avctx->width; j++) {
-            if (ptr + cpp > end)
+            if (end - ptr < cpp)
                 return AVERROR_INVALIDDATA;
 
             if ((ret = ascii2index(ptr, cpp)) < 0)
@@ -404,6 +429,9 @@ static av_cold int xpm_decode_close(AVCodecContext *avctx)
 {
     XPMDecContext *x = avctx->priv_data;
     av_freep(&x->pixels);
+
+    av_freep(&x->buf);
+    x->buf_size = 0;
 
     return 0;
 }
