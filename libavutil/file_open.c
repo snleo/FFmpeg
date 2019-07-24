@@ -30,7 +30,7 @@
 #endif
 
 #include <time.h> //snleo - to provide nanosleep() function
-#if defined(_WIN32) && !defined(__MINGW32CE__)
+
 #ifdef _WIN32
 #undef open
 #undef lseek
